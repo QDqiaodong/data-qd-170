@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "data-qd-170"
+version = "0.1.0"
+description = "电子书全文索引"
+requires-python = ">=3.11"
+dependencies = []
+[project.scripts]
+epub-index = "epub_index.cli:main"
+[tool.setuptools.packages.find]
+where = ["src"]
