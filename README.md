@@ -56,4 +56,25 @@ uv pip check --python .venv/bin/python
 
 需要Python自带SQLite支持FTS5；实际测试覆盖真实索引、查询和非法归档拒绝。生成的样例EPUB为原创文本；不包含第三方书籍。`fixtures/make_versions.py` 构造同 identifier 的四个版本（唯一重定位、歧义、章节缺失），覆盖全部重定位状态。
 
+## 作者目录
+
+导入时同时保存每个版本 OPF 中 `dc:creator`/`dc:contributor` 的原始姓名、类别内声明顺序、role（缺失时为 null）与其余 OPF 属性；来源声明原样保存，不会写回规范姓名，也不会跨版本合并。
+
+```sh
+# 维护规范身份与别名（精确全名，不做模糊匹配）
+.venv/bin/epub-index author-add --db run/lib.sqlite --name 'Jordan Lee'
+.venv/bin/epub-index alias-add --db run/lib.sqlite --author 1 --alias 'J. Lee'
+# 读取全部来源声明、未解析声明和该作者的书目
+.venv/bin/epub-index contributors --db run/lib.sqlite
+.venv/bin/epub-index unresolved --db run/lib.sqlite
+.venv/bin/epub-index author-books --db run/lib.sqlite --author 1
+# 可一次查询多个书库：首个 --db（或 --catalogue）持有目录
+.venv/bin/epub-index author-books --db run/lib.sqlite --db run/other.sqlite --author 1
+```
+
+- 目录以规范身份的显示名及其显式别名作为精确匹配名；声明只有唯一命中一个身份时才解析。零命中为 `unmapped`，命中多个身份为 `ambiguous`，两种都留在 `unresolved` 中，且携带原始姓名、类别、顺序、role 和来源版本。
+- 新增别名后，所有版本中匹配的来源声明进入该作者书目；撤销后重新未解析。别名冲突时其声明不归入任一身份。身份显示名可重复，不会因此自动合并。
+- 书目结果按版本列出，各版本自己的来源声明不去重；切换当前版本不会抹去旧版本声明。解析在每次查询时基于当前目录计算，不会出现过期归属。
+- 已有旧版归档仍可读写：首次写入目录或导入新版本时补建目录表；查询本身不修改归档。
+
 单操作者本地批处理；不承诺并发发布或断电恢复。代码/样例采用MIT许可。

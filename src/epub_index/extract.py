@@ -10,6 +10,69 @@ OPF = '{http://www.idpf.org/2007/opf}'
 DC = '{http://purl.org/dc/elements/1.1/}'
 XHTML = '{http://www.w3.org/1999/xhtml}'
 
+CATEGORIES = ('creator', 'contributor')
+
+
+def _local_name(name):
+    return name.rsplit('}', 1)[-1]
+
+
+def _declared_text(element):
+    """Declared text content, joined without rewriting the declaration."""
+    return ''.join(element.itertext())
+
+
+def metadata_declarations(package):
+    """Read dc:creator/dc:contributor declarations in document order.
+
+    Each declaration keeps its category, 1-based position within that category,
+    the original name, the OPF role (None when no role is declared) and any
+    remaining OPF attributes verbatim. OPF3 ``meta refines=... property=role``
+    is also honoured when the declaration carries an id.
+    """
+    metadata = package.find(OPF + 'metadata')
+    if metadata is None:
+        return []
+    refined = {}
+    for meta in metadata.findall(OPF + 'meta'):
+        target = meta.get('refines', '')
+        prop = meta.get('property', '')
+        if not target.startswith('#') or not prop:
+            continue
+        refined.setdefault(target[1:], {})[prop] = _declared_text(meta).strip()
+    declarations = []
+    ordinals = {category: 0 for category in CATEGORIES}
+    for element in metadata:
+        for category in CATEGORIES:
+            if element.tag != DC + category:
+                continue
+            ordinals[category] += 1
+            role = None
+            attributes = {}
+            for key, value in element.attrib.items():
+                local = _local_name(key)
+                if local == 'role':
+                    role = value
+                else:
+                    attributes[local] = value
+            identifier = element.get('id') or element.get(
+                '{http://www.w3.org/XML/1998/namespace}id')
+            if identifier:
+                for prop, value in refined.get(identifier, {}).items():
+                    if prop == 'role':
+                        if role is None:
+                            role = value
+                    else:
+                        attributes.setdefault(prop, value)
+            declarations.append({
+                'category': category,
+                'ordinal': ordinals[category],
+                'name': _declared_text(element).strip(),
+                'role': role,
+                'attributes': attributes,
+            })
+    return declarations
+
 
 def safe_path(value):
     path = PurePosixPath(value)
@@ -58,6 +121,7 @@ def extract(source):
         identifier = package.findtext(f'{OPF}metadata/{DC}identifier',default='').strip()
         if not title or not identifier:
             raise ValueError('title and identifier required')
+        contributors = metadata_declarations(package)
         manifest = {}
         for item in package.findall(f'{OPF}manifest/{OPF}item'):
             iid, href = item.get('id',''), item.get('href','')
@@ -101,4 +165,5 @@ def extract(source):
             raise ValueError('empty spine')
     with open(source,'rb') as stream:
         digest = hashlib.file_digest(stream,'sha256').hexdigest()
-    return {'title':title,'identifier':identifier,'source_sha256':digest,'chapters':chapters}
+    return {'title':title,'identifier':identifier,'source_sha256':digest,
+            'chapters':chapters,'contributors':contributors}

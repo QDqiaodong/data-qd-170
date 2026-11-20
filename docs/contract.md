@@ -54,4 +54,23 @@ All commands emit JSON on stdout and exit 2 with a message on stderr for rejecte
 - `search --db DB --query TEXT [--version ID_OR_SHA]` — literal-token FTS query scoped to one version; hits include only located annotations.
 - `pending --db DB [--version ID_OR_SHA]` — ambiguous/missing annotations with preserved anchors, context and notes.
 
-Synthetic fixtures stay original and small: the two-chapter sample and a four-variant version set (unique relocation, ambiguous relocation, missing chapter) exercising every relocation state.
+### Author catalogue
+
+An archive also catalogs the OPF `dc:creator`/`dc:contributor` declarations of every imported version and lets the reader declare which of those names belong to the same canonical author identity.
+
+- `author-add --db DB --name NAME` — create an independent canonical identity. Display names may repeat; creating an identity never matches or merges it with another.
+- `authors --db DB` — list identities with their current aliases.
+- `alias-add --db DB --author ID --alias NAME` / `alias-remove --db DB --author ID --alias NAME` — add or revoke an exact full-name mapping. Aliases are exact strings: no case folding, trimming of interior spaces, fuzzy matching or automatic merge.
+- `contributors --db DB [--db DB ...] [--catalogue DB] [--version ID_OR_SHA]` — every raw source declaration with its current resolution.
+- `unresolved --db DB [...] [--catalogue DB] [--version ID_OR_SHA]` — declarations that are currently `unmapped` or `ambiguous`.
+- `author-books --db DB [--db DB ...] [--catalogue DB] --author ID [--version ID_OR_SHA]` — books and versions whose declarations uniquely resolve to that identity.
+
+Each declaration records its source `version_id`/`version_sha256`, `category` (`creator`/`contributor`), 1-based `ordinal` within that category, the original `name`, the OPF `role` (`null` when absent) and any remaining OPF attributes. Declarations are stored per version and never rewritten, merged across versions or replaced by a canonical name. A repeated SHA remains idempotent; a new SHA stores its own declarations inside the same transaction, so a failed import leaves none behind.
+
+Resolution is computed from the current catalogue on every query: an identity's display name and its aliases are its exact names. A declaration is `resolved` only when exactly one identity maps its name; with no mapping it is `unmapped`, and with two or more identities it is `ambiguous` and belongs to none of them. Adding or revoking an alias therefore moves matching declarations in or out of an identity's book list without touching stored data.
+
+Multiple archives can be named for a query; the first (or `--catalogue`) owns identities and aliases, and all named archives contribute declarations. Resulting book groups are keyed by archive plus book, and per-version declarations are never deduplicated.
+
+Example: a book declaring `J. Lee` appears under `Jordan Lee` only after `alias-add --alias 'J. Lee'`; revoking it makes the declaration unresolved again while the raw name, category, order, role and version remain readable.
+
+Synthetic fixtures stay original and small: the two-chapter sample, a four-variant version set (unique relocation, ambiguous relocation, missing chapter) exercising every relocation state, and metadata-only EPUBs for the author catalogue.

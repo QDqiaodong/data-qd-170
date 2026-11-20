@@ -1,10 +1,12 @@
 """Versioned SQLite chapter archive and literal-token FTS5 search."""
+import json
 from pathlib import Path
 import re
 import sqlite3
 from .annotations import relocate_for_version
 from .db import (
-    DDL, SCHEMA_VERSION, check_schema, get_book, open_connection, resolve_version, utc_now,
+    DDL, SCHEMA_VERSION, check_schema, ensure_catalogue_schema, get_book,
+    open_connection, resolve_version, utc_now,
 )
 from .extract import extract
 
@@ -54,6 +56,7 @@ def ingest(source, database):
                 version_id = match[0]
             else:
                 conn.execute('BEGIN')
+                ensure_catalogue_schema(conn, create=True)
                 version_id = _save_version(conn, book_id, book, make_current=True)
                 relocate_for_version(conn, book_id, version_id)
                 conn.commit()
@@ -86,6 +89,15 @@ def _save_version(conn, book_id, book, make_current):
         conn.execute(
             'INSERT INTO search(title,text,version_id,chapter_position) VALUES (?,?,?,?)',
             (chapter['title'], chapter['text'], version_id, chapter['position']))
+    for declaration in book.get('contributors', ()):
+        conn.execute(
+            '''INSERT INTO contributor_declarations(
+                   version_id, category, ordinal, name, role, attributes)
+               VALUES (?,?,?,?,?,?)''',
+            (version_id, declaration['category'], declaration['ordinal'],
+             declaration['name'], declaration['role'],
+             json.dumps(declaration['attributes'], ensure_ascii=False,
+                        sort_keys=True)))
     if make_current:
         conn.execute('UPDATE book SET current_version_id=? WHERE id=?',
                      (version_id, book_id))

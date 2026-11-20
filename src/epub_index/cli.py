@@ -9,6 +9,10 @@ from xml.etree.ElementTree import ParseError
 import zipfile
 from .annotations import add_annotation, pending
 from .archive import ingest, list_versions, search, select_version
+from .authors import (
+    add_alias, create_author, list_authors, query_author_books,
+    query_declarations, query_unresolved, remove_alias,
+)
 from .common import read_json
 
 
@@ -61,6 +65,35 @@ def main():
     todo = commands.add_parser('pending')
     todo.add_argument('--db', type=Path, required=True)
     todo.add_argument('--version', help='version id or source SHA-256 (default: current)')
+    # Author catalogue maintenance.
+    author_new = commands.add_parser('author-add')
+    author_new.add_argument('--db', type=Path, required=True)
+    author_new.add_argument('--name', required=True, help='canonical display name')
+    author_list = commands.add_parser('authors')
+    author_list.add_argument('--db', type=Path, required=True)
+    alias_add = commands.add_parser('alias-add')
+    alias_add.add_argument('--db', type=Path, required=True)
+    alias_add.add_argument('--author', required=True, type=int)
+    alias_add.add_argument('--alias', required=True, help='exact declared full name')
+    alias_remove = commands.add_parser('alias-remove')
+    alias_remove.add_argument('--db', type=Path, required=True)
+    alias_remove.add_argument('--author', required=True, type=int)
+    alias_remove.add_argument('--alias', required=True, help='exact declared full name')
+    # Querying source declarations and one identity's books. Queries accept one
+    # or more archives; the first one (or --catalogue) owns the catalogue.
+    declarations = commands.add_parser('contributors')
+    declarations.add_argument('--db', type=Path, required=True, action='append')
+    declarations.add_argument('--catalogue', type=Path)
+    declarations.add_argument('--version', help='version id or source SHA-256 (default: all)')
+    unresolved = commands.add_parser('unresolved')
+    unresolved.add_argument('--db', type=Path, required=True, action='append')
+    unresolved.add_argument('--catalogue', type=Path)
+    unresolved.add_argument('--version', help='version id or source SHA-256 (default: all)')
+    catalogue = commands.add_parser('author-books')
+    catalogue.add_argument('--db', type=Path, required=True, action='append')
+    catalogue.add_argument('--catalogue', type=Path)
+    catalogue.add_argument('--author', required=True, type=int)
+    catalogue.add_argument('--version', help='version id or source SHA-256 (default: all)')
     args = parser.parse_args()
     temporary = None
     try:
@@ -93,8 +126,25 @@ def main():
                 args.db, args.chapter, excerpt, note, _version_value(args.version))
         elif args.command == 'search':
             result = search(args.db, args.query, _version_value(args.version))
-        else:
+        elif args.command == 'pending':
             result = pending(args.db, _version_value(args.version))
+        elif args.command == 'author-add':
+            result = create_author(args.db, args.name)
+        elif args.command == 'authors':
+            result = list_authors(args.db)
+        elif args.command == 'alias-add':
+            result = add_alias(args.db, args.author, args.alias)
+        elif args.command == 'alias-remove':
+            result = remove_alias(args.db, args.author, args.alias)
+        elif args.command == 'contributors':
+            result = query_declarations(
+                args.db, args.catalogue, _version_value(args.version))
+        elif args.command == 'unresolved':
+            result = query_unresolved(
+                args.db, args.catalogue, _version_value(args.version))
+        else:
+            result = query_author_books(
+                args.db, args.author, args.catalogue, _version_value(args.version))
     except (OSError, ValueError, TypeError, sqlite3.Error, ParseError,
             zipfile.BadZipFile, RuntimeError, json.JSONDecodeError) as error:
         print(str(error), file=sys.stderr)

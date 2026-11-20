@@ -2,7 +2,11 @@
 from datetime import datetime, timezone
 import sqlite3
 
-SCHEMA_VERSION = '2'
+SCHEMA_VERSION = '3'
+
+# Version 2 archives are the same chapter/version archive without the author
+# catalogue; they stay readable and gain the catalogue tables when first needed.
+SUPPORTED_SCHEMAS = ('2', '3')
 
 # Separate statements so each runs inside the caller's explicit transaction;
 # executescript() would issue an implicit COMMIT and break rollback atomicity.
@@ -62,6 +66,35 @@ DDL = (
             (status<>'located' AND chapter_position IS NULL AND excerpt_offset IS NULL)
         )
     )""",
+    # Author catalogue: canonical identities are independent of source
+    # declarations. An identity's display name is its canonical name; aliases
+    # add further exact full names. The same text may map to several identities
+    # (a conflict) so no unique constraint is placed on the alias text alone.
+    """CREATE TABLE authors(
+        id INTEGER PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE author_aliases(
+        id INTEGER PRIMARY KEY,
+        author_id INTEGER NOT NULL REFERENCES authors(id),
+        alias TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(author_id, alias)
+    )""",
+    # One row per OPF creator/contributor declaration per book version. The
+    # source name is never rewritten and declarations are never merged across
+    # versions; ordinal preserves the declaration order within its category.
+    """CREATE TABLE contributor_declarations(
+        id INTEGER PRIMARY KEY,
+        version_id INTEGER NOT NULL REFERENCES versions(id),
+        category TEXT NOT NULL CHECK(category IN ('creator','contributor')),
+        ordinal INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        role TEXT,
+        attributes TEXT NOT NULL,
+        UNIQUE(version_id, category, ordinal)
+    )""",
 )
 
 
@@ -81,9 +114,45 @@ def check_schema(conn):
     row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     if row is None:
         raise ValueError('unsupported archive schema')
-    if row[0] != SCHEMA_VERSION:
+    if row[0] not in SUPPORTED_SCHEMAS:
         raise ValueError('unsupported archive schema version: ' + row[0])
     return row[0]
+
+
+# Catalogue tables added in schema 3. An archive imported by an earlier build
+# has no author catalogue; creating these tables in place lets existing sources
+# be queried without a re-import while keeping every archived version.
+_CATALOGUE_TABLES = ('authors', 'author_aliases', 'contributor_declarations')
+
+
+def ensure_catalogue_schema(conn, create=False):
+    """Create any missing author-catalogue tables for an older archive.
+
+    Existing tables and archived rows are untouched. When ``create`` is false
+    nothing is written, so read-only queries never modify an archive. Returns
+    True when the complete catalogue schema is available afterwards.
+    """
+    existing = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    missing = [name for name in _CATALOGUE_TABLES if name not in existing]
+    if not missing:
+        return True
+    if not create:
+        return False
+    own_transaction = not conn.in_transaction
+    if own_transaction:
+        conn.execute('BEGIN')
+    try:
+        for name in missing:
+            conn.execute(next(statement for statement in DDL
+                              if statement.startswith('CREATE TABLE ' + name + '(')))
+        if own_transaction:
+            conn.commit()
+    except Exception:
+        if own_transaction:
+            conn.rollback()
+        raise
+    return True
 
 
 def get_book(conn):
