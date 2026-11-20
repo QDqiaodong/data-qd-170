@@ -15,6 +15,7 @@ from .authors import (
 )
 from .batch import intake
 from .common import read_json
+from . import workspace as ws
 
 
 def _version_value(raw):
@@ -24,6 +25,16 @@ def _version_value(raw):
     if text.isdigit():
         return int(text)
     return text
+
+
+def _positions(raw):
+    parts = [part.strip() for part in str(raw).split(',')]
+    if not parts or any(not part.isdigit() for part in parts):
+        raise ValueError('positions must be comma-separated positive integers')
+    positions = [int(part) for part in parts]
+    if not positions or any(position < 1 for position in positions):
+        raise ValueError('positions must be comma-separated positive integers')
+    return positions
 
 
 def _payload(args, inline, file_name):
@@ -100,6 +111,53 @@ def main():
     catalogue.add_argument('--catalogue', type=Path)
     catalogue.add_argument('--author', required=True, type=int)
     catalogue.add_argument('--version', help='version id or source SHA-256 (default: all)')
+    # Journal anthology workflow: one local workspace bound to one catalogue.
+    ws_init = commands.add_parser('workspace-init')
+    ws_init.add_argument('--workspace', type=Path, required=True)
+    ws_init.add_argument('--catalogue', type=Path, required=True,
+                         help='existing archive whose authors table is the common catalogue')
+    plan_save = commands.add_parser('plan-save')
+    plan_save.add_argument('--workspace', type=Path, required=True)
+    plan_save.add_argument('--issue', required=True, type=int)
+    plan_save.add_argument('--plan', type=Path, required=True,
+                           help='JSON array of {archive, identifier, source_sha256, position}')
+    plan_reserve = commands.add_parser('plan-reserve')
+    plan_reserve.add_argument('--workspace', type=Path, required=True)
+    plan_reserve.add_argument('--issue', required=True, type=int)
+    plan_reserve.add_argument('--catalogue', type=Path,
+                              help='must equal the catalogue bound at workspace-init')
+    plan_withdraw = commands.add_parser('plan-withdraw')
+    plan_withdraw.add_argument('--workspace', type=Path, required=True)
+    plan_withdraw.add_argument('--issue', required=True, type=int)
+    plan_list = commands.add_parser('plan-list')
+    plan_list.add_argument('--workspace', type=Path, required=True)
+    plan_list.add_argument('--issue', type=int)
+    license_reg = commands.add_parser('license-register')
+    license_reg.add_argument('--workspace', type=Path, required=True)
+    license_reg.add_argument('--catalogue', type=Path, required=True)
+    license_reg.add_argument('--author', required=True, type=int)
+    license_reg.add_argument('--archive', type=Path, required=True)
+    license_reg.add_argument('--identifier', required=True)
+    license_reg.add_argument('--version-sha', required=True, help='full source SHA-256 of the exact version')
+    license_reg.add_argument('--positions', required=True,
+                             help='comma-separated allowed 1-based spine positions, e.g. 1,3')
+    license_reg.add_argument('--quota', required=True, type=int)
+    license_revoke = commands.add_parser('license-revoke')
+    license_revoke.add_argument('--workspace', type=Path, required=True)
+    license_revoke.add_argument('--license', required=True)
+    license_revoke.add_argument('--reason')
+    license_list = commands.add_parser('license-list')
+    license_list.add_argument('--workspace', type=Path, required=True)
+    license_list.add_argument('--license')
+    publish = commands.add_parser('publish')
+    publish.add_argument('--workspace', type=Path, required=True)
+    publish.add_argument('--issue', required=True, type=int)
+    publish.add_argument('--catalogue', type=Path,
+                         help='must equal the catalogue bound at workspace-init')
+    anthology = commands.add_parser('anthology')
+    anthology.add_argument('--workspace', type=Path, required=True)
+    anthology.add_argument('--issue', required=True, type=int)
+    anthology.add_argument('--output', type=Path, help='also copy the frozen anthology JSON to this path')
     args = parser.parse_args()
     temporary = None
     try:
@@ -150,9 +208,35 @@ def main():
         elif args.command == 'unresolved':
             result = query_unresolved(
                 args.db, args.catalogue, _version_value(args.version))
-        else:
+        elif args.command == 'author-books':
             result = query_author_books(
                 args.db, args.author, args.catalogue, _version_value(args.version))
+        elif args.command == 'workspace-init':
+            result = ws.init_workspace(args.workspace, args.catalogue)
+        elif args.command == 'plan-save':
+            result = ws.save_plan(args.workspace, args.issue, args.plan)
+        elif args.command == 'plan-reserve':
+            result = ws.reserve_plan(
+                args.workspace, args.issue, args.catalogue)
+        elif args.command == 'plan-withdraw':
+            result = ws.withdraw_plan(args.workspace, args.issue)
+        elif args.command == 'plan-list':
+            result = ws.list_plans(args.workspace, args.issue)
+        elif args.command == 'license-register':
+            positions = _positions(args.positions)
+            result = ws.register_license(
+                args.workspace, args.catalogue, args.author, args.archive,
+                args.identifier, args.version_sha, positions, args.quota)
+        elif args.command == 'license-revoke':
+            result = ws.revoke_license(
+                args.workspace, args.license, args.reason)
+        elif args.command == 'license-list':
+            result = ws.list_licenses(args.workspace, args.license)
+        elif args.command == 'publish':
+            result = ws.publish_issue(args.workspace, args.issue, args.catalogue)
+        else:
+            result = ws.get_anthology(
+                args.workspace, args.issue, args.output)
     except (OSError, ValueError, TypeError, sqlite3.Error, ParseError,
             zipfile.BadZipFile, RuntimeError, json.JSONDecodeError) as error:
         print(str(error), file=sys.stderr)

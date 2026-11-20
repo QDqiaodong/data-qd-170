@@ -85,3 +85,53 @@ All validation and archive building happen inside a temporary sibling directory 
 Archive file names are derived from the package identifier but sanitized to a bounded safe alphabet (`NNN-slug-sha12.sqlite`), so identifier path characters can never steer the output location. The generated `receipt.json` inside the target (also the command's stdout) records, in manifest order, each input entry, identifier, SHA-256, title and generated archive file name, plus the manifest's own SHA-256 — every input traces to its actual database. Published archives use the same schema as single-import ones and work with every existing command, including later version imports of the same book.
 
 Synthetic fixtures stay original and small: the two-chapter sample, a four-variant version set (unique relocation, ambiguous relocation, missing chapter) exercising every relocation state, and metadata-only EPUBs for the author catalogue.
+
+## Journal anthology workspace
+
+A separate offline workflow shares one local workspace directory and designates one existing archive as the common author catalogue. The workspace keeps its own `workspace.sqlite` and an `anthologies/` directory; every book archive and the catalogue are opened strictly read-only, so workspace operations never mutate an archived library. No login, network or third-party dependency is involved.
+
+### Chapter selection and author identity
+
+A plan is an ordered JSON array; each entry has exactly `archive`, `identifier`, `source_sha256` (64 lowercase hex characters) and `position` (a positive 1-based spine index). The archive path only locates the file: chapter identity is the triple (`identifier`, `source_sha256`, `position`). Saving a plan verifies the triple inside the named archive and rejects an identifier mismatch, a SHA absent from that archive, a missing position, a malformed digest and a repeated chapter within one issue. The current version, another version's same-position chapter and search snippets can never substitute for the explicitly selected chapter. Relative archive paths resolve against the plan file's directory and are stored resolved.
+
+Licensing needs consider only `dc:creator` declarations stored on the selected version (`contributor` declarations never count). A selectable version must declare at least one creator, and every creator name must resolve through the catalogue's current exact-name rules to exactly one canonical identity; zero owners (`unmapped`) and multiple owners (`ambiguous`) both block reservation and publication with a named reason. Two declarations resolving to one canonical identity create a single demand for that chapter. Author ids always come from the catalogue's own `authors` table; an id that exists in another archive but not the catalogue is rejected rather than matched by coincidence.
+
+### Licenses
+
+Each license has a generated, never-reused code and an immutable scope fixed at registration: one canonical author, one book identifier, one exact version SHA, a nonempty set of allowed spine positions and a positive integer quota. Registration rejects unknown catalogue authors, unknown book versions or positions, repeated positions and non-positive quotas. Several active licenses may cover the same chapter and author. One quota unit covers exactly one (issue, chapter, author) triple: another issue reprinting the chapter or a second author of the same chapter each consumes another unit. Revocation marks the license unusable for future demand but always preserves its formal usage history.
+
+### Reservations, feasibility and queue order
+
+Saving a plan consumes no quota. A successful reservation commits the whole issue's demand set, records a monotonically increasing `reservation_seq` and snapshots the resolved author id and display name per chapter. Feasibility is a max-flow matching over demand units and active licenses: a license is eligible only when its author, identifier, version SHA and position scope match, and its capacity is the initial quota minus formal usage rows (revoked licenses are excluded). A new reservation is accepted only when the new issue together with every earlier reserved issue admits a flow covering all demands; a failed application never displaces an earlier reservation and leaves no partial author snapshot.
+
+An editor must withdraw a reserved plan before changing it. Withdrawing releases only the reservation; the plan stays a draft and, when reserved again, receives a fresh sequence number at the tail of the queue. Each issue carries an event log (`reserved`, `reserve_failed`, `withdrawn`, `returned`, `publish_rejected`, `published`) with timestamps and reasons, so failed applications and revocations stay explainable.
+
+### Revocation cascade
+
+Revoking a license and the resulting reservation changes commit in one transaction. Reserved issues are visited in `reservation_seq` order. An issue keeps its reservation while its demands, together with every earlier issue already kept in this pass, remain fully satisfiable from the surviving pool. An issue that can no longer be paid for returns to draft, releases its whole reservation and records the revocation reason; later issues are evaluated without the returned issue occupying any capacity. An issue that still has enough other licenses is never returned merely because it might previously have used the revoked license. Published usage rows are untouched.
+
+### Publication and frozen anthologies
+
+Only a reserved issue can publish. Publication first re-opens the planned archives and re-runs version, chapter and creator resolution against the catalogue as it reads now: a missing archive, a creator that no longer uniquely resolves, or an author-id set different from the reserved set rejects the whole issue before any quota is touched, keeps the reservation and records a `publish_rejected` event. The license assignment is a feasible flow that also covers every other still-reserved issue, so publishing an issue cannot strand an earlier or later reservation; the assignment determines the concrete license code used by each author.
+
+The publication record, every `license_usages` row and the final anthology commit in one transaction (with `BEGIN IMMEDIATE` serialization, so two concurrent applications can never spend the same capacity). An anthology entry stores, in plan order, the exact source identity, member `href`, chapter title and archived body text, the author ids and names as resolved at publication, and each author's actually used license code. Reader annotations are never included and published content is never recomputed against a later catalogue.
+
+Repeating publication for an already published issue, or retrieving its anthology, recognizes the stored record and returns the original data without re-opening an archive or deducting quota again; the call therefore stays safe to retry after an interruption and succeeds even if a license was later revoked or the originating archive was moved away.
+
+### CLI surface
+
+The new commands follow the existing convention: JSON on stdout, a stderr message and exit 2 on rejected input.
+
+- `workspace-init --workspace DIR --catalogue DB`
+- `plan-save --workspace DIR --issue N --plan FILE`
+- `plan-reserve --workspace DIR --issue N [--catalogue DB]`
+- `plan-withdraw --workspace DIR --issue N`
+- `plan-list --workspace DIR [--issue N]`
+- `license-register --workspace DIR --catalogue DB --author ID --archive DB --identifier ID --version-sha SHA --positions P[,P...] --quota N`
+- `license-revoke --workspace DIR --license CODE [--reason TEXT]`
+- `license-list --workspace DIR [--license CODE]`
+- `publish --workspace DIR --issue N [--catalogue DB]`
+- `anthology --workspace DIR --issue N [--output FILE]`
+
+An explicit `--catalogue` on reservation or publication must resolve to the same archive bound at `workspace-init`; a mismatch is rejected. Existing import, search, version, annotation, batch and author-catalogue commands are unchanged.
+

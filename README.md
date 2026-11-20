@@ -94,3 +94,42 @@ uv pip check --python .venv/bin/python
 - 已有旧版归档仍可读写：首次写入目录或导入新版本时补建目录表；查询本身不修改归档。
 
 单操作者本地批处理；不承诺并发发布或断电恢复。代码/样例采用MIT许可。
+
+## 馆刊选章与许可工作流
+
+编辑与版权登记员共用一个本地**工作空间**（普通目录，内含独立的 `workspace.sqlite` 与 `anthologies/`），并在创建时指定一个现有归档作为**共同作者目录**。整个流程离线运行，不新增依赖；所有书库与目录都以只读方式打开，工作空间绝不改动归档库。
+
+```sh
+# 1) 用持有规范作者的现有归档建立工作空间
+.venv/bin/epub-index workspace-init --workspace run/journal --catalogue run/lib.sqlite
+# 2) 编辑按刊号保存有序选章计划（JSON 数组；相对路径按计划文件所在目录解析）
+#    每项恰好含 archive / identifier / source_sha256 / position 四个字段
+.venv/bin/epub-index plan-save --workspace run/journal --issue 1 --plan run/issue1.json
+# 3) 登记员登记许可（编号自动生成、不可复用；范围与初始额度登记后不变）
+.venv/bin/epub-index license-register --workspace run/journal --catalogue run/lib.sqlite \
+    --author 1 --archive run/lib.sqlite --identifier urn:demo:book \
+    --version-sha <完整64位SHA-256> --positions 1,2 --quota 2
+# 4) 编辑申请整期预留，成功后刊发；重复刊发/取选集走幂等重放
+.venv/bin/epub-index plan-reserve --workspace run/journal --issue 1 --catalogue run/lib.sqlite
+.venv/bin/epub-index publish --workspace run/journal --issue 1 --catalogue run/lib.sqlite
+.venv/bin/epub-index anthology --workspace run/journal --issue 1
+```
+
+**身份与授权范围。** 选章身份是三元组（package identifier、完整源 SHA-256、从 1 起的 spine 位置），`archive` 路径只用于打开文件，不能替代其中任何一项；当前版、其他版本同位置章节和搜索摘要都不能充当所选正文。同一期同一章只能出现一次。授权只看所选版本保存的 `dc:creator`：至少一条创作者声明，且每条都必须对共同目录**唯一解析**；多条声明指向同一规范作者时该章只需一份许可，`dc:contributor` 不产生授权需求。工作空间中的作者 id 一律来自指定目录自身的 `authors` 表，不会拿其他书库里数字相同的 id 来匹配。
+
+**许可。** 一条许可指向一位规范作者、一本书的一个精确版本、一组明确允许的章节位置和一个正整数额度。同一章同一位作者可以有多条可用许可；一次额度只覆盖“一期 × 一章 × 一位作者”，另一期刊发或另一位作者都要再次扣额。不存在的作者、版本、章节或非正整数额度一律拒绝登记。`license-list` 可查看许可的原始范围、状态（`active`/`revoked`）、已用/剩余额度和全部正式使用记录。
+
+**预留与撤回。** 保存计划不占额度；`plan-reserve` 成功才承诺整期全部章节与作者需求，并记录通过次序（`reservation_seq`）和各章解析出的作者。可行性按最大流判定：扣除正式用量、排除已撤销许可后，新计划与所有既有预留仍能一起被足额覆盖才通过；新申请失败绝不挤掉先前预留，失败原因写入计划与事件流。已预留计划必须先 `plan-withdraw` 才能修改；撤回只释放预留、保留计划，重新预留按新次序排队。`plan-list`（可带 `--issue`）展示已保存/已预留/已刊发状态、各章作者快照及 `reserved`、`reserve_failed`、`withdrawn`、`returned`、`publish_rejected`、`published` 事件与原因。
+
+**撤销的级联处理。** `license-revoke` 只禁止该许可今后被使用，已刊使用记录照留。撤销与状态变化在同一事务内按预留通过次序生效：能与在先各期一起足额满足的继续预留；不能满足的整期退回待预留、注明撤销原因并释放全部预留；判断后续各期时不再占用已退回期的额度。只要还有其他许可足以覆盖，计划不会仅因原来“可能”用过被撤销的许可而被退回。
+
+**刊发与选集。** 只有已预留计划能刊发。刊发前重新从归档和共同目录核对所选版本、章节和各章作者集合；缺档、声明不再唯一解析，或作者集合与预留时不同，整期拒绝、不扣额、预留保留（须明确撤回后重提）。选定正式许可时，扣除本期用量后仍须保证其他已预留各期可足额刊发，因此可能强制使用范围更窄的许可（见下例）。刊发记录、许可用量和最终 JSON 选集在同一事务提交，不可能只扣额、只存部分章节或让两个并发申请占同一份额度（工作空间写事务以 `BEGIN IMMEDIATE` 串行化）。选集按计划顺序保存每章的确切来源身份、`href`、标题与归档正文、当时的作者 id/姓名和每位作者实际使用的许可编号，不含读者私有批注。已刊内容不可改稿、不按当前目录重算；按同刊号再次 `publish` 或 `anthology` 会识别已刊记录并返回原数据——即使许可后来撤销、归档库已移走，也不重复扣额、不丢失原选集。
+
+以规格中的甲乙两章为例：许可 A 覆盖甲、乙，许可 B 只覆盖甲，额度各一份。先预留只含甲的第一期、再预留只含乙的第二期都成功；第一期先发时必须实际使用 B，第二期才能用 A。若刊发前撤销 B，则第一期继续预留、第二期退回；一期有多章或共同作者时，任一需求得不到满足则整期无任何残余预留。这些规则与覆盖别名在预留后变得歧义、当前版与明确所选版本不同、刊发后撤销/重试/归档不可用等情形，均由 `tests/test_workspace.py` 自动化覆盖。
+
+工作空间还提供以下命令，全部沿用“成功输出 JSON、拒绝时 stderr 给消息并退出 2”的惯例：
+
+- `plan-withdraw --workspace DIR --issue N` — 撤回预留，计划保留。
+- `license-revoke --workspace DIR --license CODE [--reason TEXT]` — 撤销并原子级联处理未刊计划，返回保留/退回的刊号。
+- `anthology --workspace DIR --issue N [--output PATH]` — 取回冻结选集（可选另存一份）。
+
