@@ -48,6 +48,7 @@ Example: an annotation on excerpt `old quay` in chapter two of version 1 moves w
 All commands emit JSON on stdout and exit 2 with a message on stderr for rejected input.
 
 - `import --source EPUB --db DB` — first import (new target) or a new version for an existing archive; repeated SHA is idempotent.
+- `import-batch --manifest MANIFEST --target DIR` — atomically publish one independent archive per listed EPUB plus a receipt; all-or-nothing.
 - `versions --db DB` — list versions with the current flag.
 - `select --db DB --version ID_OR_SHA` — set the current version.
 - `annotate --db DB --chapter POSITION --excerpt TEXT [--excerpt-file PATH] --note TEXT [--note-file PATH] [--version ID_OR_SHA]` — add an annotation; file inputs contain a single JSON string, and inline/file inputs are mutually exclusive.
@@ -72,5 +73,15 @@ Resolution is computed from the current catalogue on every query: an identity's 
 Multiple archives can be named for a query; the first (or `--catalogue`) owns identities and aliases, and all named archives contribute declarations. Resulting book groups are keyed by archive plus book, and per-version declarations are never deduplicated.
 
 Example: a book declaring `J. Lee` appears under `Jordan Lee` only after `alias-add --alias 'J. Lee'`; revoking it makes the declaration unresolved again while the raw name, category, order, role and version remain readable.
+
+## Batch intake
+
+`import-batch` reads an ordered JSON manifest: an array of objects, each with exactly one `source` field naming a local EPUB path (relative paths resolve against the manifest file's directory; absolute paths are accepted). Every source is validated with the same bounded EPUB checks as a single import, and each book's package identifier and source SHA-256 are read during preflight. Book identity never comes from file names.
+
+The batch is rejected as a whole — naming the manifest items and reasons — when any source is missing or invalid, when two items share a package identifier, or when two items name the same source file (same resolved path or same SHA-256). One identifier therefore maps to exactly one archive per published batch.
+
+All validation and archive building happen inside a temporary sibling directory of the target. Only when every item succeeds is the directory atomically renamed to the target. The target must not already exist as anything (file, directory or symlink) and is never overwritten. On any item or publish failure the target does not exist and no visible partial archives remain; source EPUBs are only read, never moved, rewritten or deleted. If temporary-directory cleanup itself fails, the error reports the actual residue location and never claims the target was published.
+
+Archive file names are derived from the package identifier but sanitized to a bounded safe alphabet (`NNN-slug-sha12.sqlite`), so identifier path characters can never steer the output location. The generated `receipt.json` inside the target (also the command's stdout) records, in manifest order, each input entry, identifier, SHA-256, title and generated archive file name, plus the manifest's own SHA-256 — every input traces to its actual database. Published archives use the same schema as single-import ones and work with every existing command, including later version imports of the same book.
 
 Synthetic fixtures stay original and small: the two-chapter sample, a four-variant version set (unique relocation, ambiguous relocation, missing chapter) exercising every relocation state, and metadata-only EPUBs for the author catalogue.

@@ -13,6 +13,7 @@ from .authors import (
     add_alias, create_author, list_authors, query_author_books,
     query_declarations, query_unresolved, remove_alias,
 )
+from .batch import intake
 from .common import read_json
 
 
@@ -45,6 +46,11 @@ def main():
     load = commands.add_parser('import')
     load.add_argument('--source', type=Path, required=True)
     load.add_argument('--db', type=Path, required=True)
+    batch = commands.add_parser('import-batch')
+    batch.add_argument('--manifest', type=Path, required=True,
+                       help='ordered JSON manifest of {"source": path} entries')
+    batch.add_argument('--target', type=Path, required=True,
+                       help='new directory to publish; must not exist')
     versions = commands.add_parser('versions')
     versions.add_argument('--db', type=Path, required=True)
     choose = commands.add_parser('select')
@@ -115,6 +121,8 @@ def main():
                 os.close(fd)
                 result = ingest(args.source, temporary)
                 os.link(temporary, args.db)
+        elif args.command == 'import-batch':
+            result = intake(args.manifest, args.target)
         elif args.command == 'versions':
             result = list_versions(args.db)
         elif args.command == 'select':
