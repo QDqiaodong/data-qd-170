@@ -49,9 +49,11 @@ class ArchiveTests(unittest.TestCase):
     def test_non_utf8_xml_rejected(self):
         self.rewrite(lambda rows:rows.update({'OPS/one.xhtml':rows['OPS/one.xhtml'].decode().encode('utf-16')}))
         with self.assertRaises(UnicodeError):extract(self.book)
-    def test_existing_database_refused(self):
-        ingest(self.book,self.db)
-        with self.assertRaises(ValueError):ingest(self.book,self.db)
+    def test_repeated_import_same_sha_is_idempotent(self):
+        first=ingest(self.book,self.db)
+        again=ingest(self.book,self.db)
+        self.assertEqual(again['action'],'unchanged')
+        self.assertEqual(again['version_id'],first['version_id'])
         self.assertEqual(len(search(self.db,'harbor')),2)
     def test_fixture_is_reproducible(self):
         other=fixture.make(self.root/'other.epub');self.assertEqual(self.book.read_bytes(),other.read_bytes())

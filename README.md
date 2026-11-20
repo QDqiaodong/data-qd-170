@@ -30,6 +30,30 @@ uv pip check --python .venv/bin/python
 
 数据库目标必须不存在，重复演示请指定另一个新数据库路径；查询是只读的。导入先完整校验到临时库，成功后原子发布，已有目标拒绝覆盖；失败退出2，旧目标保留。SQLite档案可脱离输入查询。
 
-需要Python自带SQLite支持FTS5；实际测试覆盖真实索引、查询和非法归档拒绝。生成的样例EPUB为原创两章文本；不包含第三方书籍。
+## 多版本与读者批注
+
+同一书籍以 EPUB package identifier 识别，版本以源文件 SHA-256 识别。向已有书库再次执行 `import` 时，新 SHA 完整校验后保存为新版本，不覆盖旧章节或搜索索引；重复导入同一 SHA 幂等返回 `unchanged`；同 SHA 的身份冲突拒绝。新版本仅在整本 EPUB 成功保存后成为当前版本，失败更新回滚，不留下可搜索的半成品。
+
+```sh
+# v1 首版（目标不存在）
+.venv/bin/epub-index import --source run/v1.epub --db run/lib.sqlite
+# 在 v1 第2章对精确原文摘录加批注（保存前后各至多32字符上下文）
+.venv/bin/epub-index annotate --db run/lib.sqlite --chapter 2 --version 1 \
+    --excerpt 'old quay' --note 'check this quay'
+# 同书新版本：批注按原文摘录+上下文线索自动重定位
+.venv/bin/epub-index import --source run/v2.epub --db run/lib.sqlite
+.venv/bin/epub-index versions --db run/lib.sqlite
+.venv/bin/epub-index search --db run/lib.sqlite --query quay --version 2
+.venv/bin/epub-index select --db run/lib.sqlite --version 1
+.venv/bin/epub-index pending --db run/lib.sqlite --version 2
+```
+
+- `search` 默认查当前版本，可用 `--version` 传版本 id 或完整 SHA-256；只有唯一重定位（`located`）的批注随命中章节展示，批注文字与摘录原样返回。
+- 重定位有两个及以上上下文匹配候选时为 `ambiguous`，摘录消失为 `missing`；两者都不挂搜索命中，但可由 `pending` 读取，并保留原章节锚点、摘录、上下文线索和读者原文，系统不自动指派也不改写。
+- 旧版本搜索继续显示该版本自己的批注位置；章节移动或路径变化不改变批注原文。
+- 批注摘录必须是所选章节正文的非空连续原文子串（同章多次出现的摘录也拒绝）；FTS 分词结果、通配符和归一化空白短语不能作为锚点。
+- `annotate` 的 `--excerpt/--note` 与 `--excerpt-file/--note-file` 二选一，文件内容为单个 JSON 字符串。
+
+需要Python自带SQLite支持FTS5；实际测试覆盖真实索引、查询和非法归档拒绝。生成的样例EPUB为原创文本；不包含第三方书籍。`fixtures/make_versions.py` 构造同 identifier 的四个版本（唯一重定位、歧义、章节缺失），覆盖全部重定位状态。
 
 单操作者本地批处理；不承诺并发发布或断电恢复。代码/样例采用MIT许可。
